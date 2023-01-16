@@ -1,16 +1,20 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::{Build, Rocket};
+use rocket::{Build, Rocket, Request};
 use rocket::form::Form;
 use rocket::request::FromParam;
-use rocket::http::ContentType;
+use rocket::http::{ContentType, Status};
 use rocket::response::{self, Responder, Response, status};
+use rocket::fs::{NamedFile, relative};
 
 use std::io::Cursor;
+use std::path::Path;
 
 use lazy_static::lazy_static;
 use hashbrown::HashMap;
+
+//* --- templating -------------------------------------------------------------
 
 fn default_response<'r>() -> Response<'r> {
     Response::build()
@@ -18,6 +22,8 @@ fn default_response<'r>() -> Response<'r> {
     .raw_header("X-CUSTOM-ID", "CUSTOM")
     .finalize()
 }
+
+//* --- user -------------------------------------------------------------------
 
 #[derive(FromForm)]
 struct Filters {
@@ -89,6 +95,8 @@ impl<'r> FromParam<'r> for NameGrade<'r> {
     }
 }
 
+//* --- object store -----------------------------------------------------------
+
 lazy_static! {
     static ref USERS: HashMap<&'static str, User> = {
         let mut map = HashMap::new();
@@ -126,6 +134,23 @@ lazy_static! {
     };
 }
 
+//* --- routes -----------------------------------------------------------------
+
+#[catch(403)]
+fn forbidden(reqest: &Request) -> String {
+    format!("Access forbidden {}.", reqest.uri())
+}
+
+#[catch(404)]
+fn not_found(reqest: &Request) -> String {
+    format!("We cannot find this page {}.", reqest.uri())
+}
+
+#[get("/favicon.png")]
+async fn favicon() -> NamedFile {
+    NamedFile::open(Path::new(relative!("static")).join("favicon.png")).await.unwrap()
+}
+
 #[post("/post", data="<data>")]
 fn post(data: Form<Filters>) -> &'static str {
     "POST Request"
@@ -133,11 +158,7 @@ fn post(data: Form<Filters>) -> &'static str {
 
 #[get("/user/<uuid>", rank=1, format="text/plain")]
 fn user(uuid: &str) -> Option<&User> {
-    let user = USERS.get(uuid);
-    match user {
-        Some(user) => Some(user),
-        None => None,
-    }
+    USERS.get(uuid)
 }
 
 /*#[get("/users/<grade>?<filters..>")]
@@ -146,7 +167,7 @@ fn users(grade: u8, filters: Filters) {
 }*/
 
 #[get("/users/<name_grade>?<filters..>")]
-fn users(name_grade: NameGrade, filters: Option<Filters>) -> Option<NewUser> {
+fn users(name_grade: NameGrade, filters: Option<Filters>) -> Result<NewUser, Status> {
     let users: Vec<&User> = USERS
         .values()
         .filter(|user| user.name.contains(&name_grade.name) 
@@ -160,10 +181,10 @@ fn users(name_grade: NameGrade, filters: Option<Filters>) -> Option<NewUser> {
             }
         })
         .collect();
-    if users.len() > 0 {
-        Some(NewUser(users))
+    if users.is_empty() {
+        Err(Status::Forbidden)
     } else {
-        None
+        Ok(NewUser(users))
     }
 }
 
@@ -183,10 +204,13 @@ async fn index() -> &'static str {
     "Hello, Rocket!"
 }
 
+//* --- main -------------------------------------------------------------------
+
 #[launch]
 fn rocket() -> Rocket<Build> {
     rocket::build()
-        .mount("/", routes![user, users])
+        .mount("/", routes![user, users, favicon])
+        .register("/", catchers![forbidden, not_found])
 }
 
 // #[rocket::main]
