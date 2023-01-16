@@ -5,12 +5,19 @@ use rocket::{Build, Rocket};
 use rocket::form::Form;
 use rocket::request::FromParam;
 use rocket::http::ContentType;
-use rocket::response::{self, Responder, Response};
+use rocket::response::{self, Responder, Response, status};
 
 use std::io::Cursor;
 
 use lazy_static::lazy_static;
 use hashbrown::HashMap;
+
+fn default_response<'r>() -> Response<'r> {
+    Response::build()
+    .header(ContentType::Plain)
+    .raw_header("X-CUSTOM-ID", "CUSTOM")
+    .finalize()
+}
 
 #[derive(FromForm)]
 struct Filters {
@@ -29,11 +36,12 @@ struct User {
 
 impl<'r> Responder<'r, 'r> for &'r User {
     fn respond_to(self, _request: &'r rocket::Request<'_>) -> response::Result<'r> {
+        let base_response = default_response();
         let user = format!("Found user: {:?}", self);
         Response::build()
             .sized_body(user.len(), Cursor::new(user))
             .raw_header("X-USER-ID", self.uuid.to_string())
-            .header(ContentType::Plain)
+            .merge(base_response)
             .ok()
     }
 }
@@ -43,13 +51,15 @@ struct NewUser<'a>(Vec<&'a User>);
 
 impl<'r> Responder<'r, 'r> for NewUser<'r> {
     fn respond_to(self, _request: &'r rocket::Request<'_>) -> response::Result<'r> {
+        let base_response = default_response();
         let user = self.0.iter()
             .map(|u| format!("{:?}", u))
             .collect::<Vec<String>>()
             .join(",");
         Response::build()
             .sized_body(user.len(), Cursor::new(user))
-            .header(ContentType::Plain)
+            .raw_header("X-CUSTOM-ID", "USERS")
+            .join(base_response)
             .ok()
     }
 }
