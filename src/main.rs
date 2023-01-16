@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::{Build, Rocket, Request};
+use rocket::{Build, Rocket, Request, State};
 use rocket::form::Form;
 use rocket::request::FromParam;
 use rocket::http::{ContentType, Status};
@@ -10,6 +10,7 @@ use rocket::fs::{NamedFile, relative};
 
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lazy_static::lazy_static;
 use hashbrown::HashMap;
@@ -21,6 +22,20 @@ fn default_response<'r>() -> Response<'r> {
     .header(ContentType::Plain)
     .raw_header("X-CUSTOM-ID", "CUSTOM")
     .finalize()
+}
+
+struct VisitorCounter {
+    visitor: AtomicU64,
+}
+
+impl VisitorCounter {
+    fn increment(&self) {
+        self.visitor.fetch_add(1, Ordering::Relaxed);
+        println!(
+            "Number of visitors: {}",
+            self.visitor.load(Ordering::Relaxed)
+        );
+    }
 }
 
 //* --- user -------------------------------------------------------------------
@@ -157,7 +172,8 @@ fn post(data: Form<Filters>) -> &'static str {
 }
 
 #[get("/user/<uuid>", rank=1, format="text/plain")]
-fn user(uuid: &str) -> Option<&User> {
+fn user<'a>(counter: &State<VisitorCounter>, uuid: &'a str) -> Option<&'a User> {
+    counter.increment();
     USERS.get(uuid)
 }
 
@@ -167,7 +183,8 @@ fn users(grade: u8, filters: Filters) {
 }*/
 
 #[get("/users/<name_grade>?<filters..>")]
-fn users(name_grade: NameGrade, filters: Option<Filters>) -> Result<NewUser, Status> {
+fn users<'a>(counter: &State<VisitorCounter>, name_grade: NameGrade, filters: Option<Filters>) -> Result<NewUser<'a>, Status> {
+    counter.increment();
     let users: Vec<&User> = USERS
         .values()
         .filter(|user| user.name.contains(&name_grade.name) 
@@ -208,7 +225,11 @@ async fn index() -> &'static str {
 
 #[launch]
 fn rocket() -> Rocket<Build> {
+    let visitor_counter = VisitorCounter {
+        visitor: AtomicU64::new(0),
+    };
     rocket::build()
+        .manage(visitor_counter)
         .mount("/", routes![user, users, favicon])
         .register("/", catchers![forbidden, not_found])
 }
