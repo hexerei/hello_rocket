@@ -32,6 +32,34 @@ fn default_response<'r>() -> Response<'r> {
     .finalize()
 }
 
+/*
+    Injecting a tracing ID to requests and responses
+*/
+const X_TRACE_ID: &str = "X-TRACE-ID";
+struct XTraceId {}
+#[rocket::async_trait]
+impl Fairing for XTraceId {
+    fn info(&self) -> Info {
+        Info {
+            name: "X-TRACE-ID Injector",
+            kind: Kind::Request | Kind::Response,
+        }
+    }
+    async fn on_request(&self, req: &mut Request<'_>, _: &mut Data<'_>) {
+        req.add_header(Header::new(
+            X_TRACE_ID,
+            Uuid::new_v4().hyphenated().to_string()
+        ));
+    }
+    async fn on_response<'r>(&self, req: &'r Request<'_>, res: &mut Response<'r>) {
+        res.set_header(Header::new(
+            X_TRACE_ID,
+            req.headers().get_one(X_TRACE_ID).unwrap()
+        ));
+    }
+}
+
+
 struct VisitorCounter {
     visitor: AtomicU64,
 }
@@ -242,8 +270,10 @@ async fn rocket() -> Rocket<Build> {
     let visitor_counter = VisitorCounter {
         visitor: AtomicU64::new(0),
     };
+    let x_trace_id = XTraceId {};
     this_rocket
         .attach(visitor_counter)
+        .attach(x_trace_id)
         .manage(pool)
         .mount("/", routes![user, users, favicon])
         .register("/", catchers![forbidden, not_found])
