@@ -1,15 +1,16 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::{Build, Rocket, Request, State};
+use rocket::{Build, Data, Orbit, Rocket, State};
+use rocket::fairing::{self, Fairing, Info, Kind};
 use rocket::form::Form;
-use rocket::request::FromParam;
-use rocket::http::{ContentType, Status};
-use rocket::response::{self, Responder, Response, status};
 use rocket::fs::{NamedFile, relative};
+use rocket::http::{ContentType, Header, Status};
+use rocket::request::{FromParam, Request};
+use rocket::response::{self, Responder, Response};
 
 use serde::Deserialize;
-use sqlx::{FromRow, PgPool, query};
+use sqlx::{FromRow, PgPool};
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
@@ -42,6 +43,32 @@ impl VisitorCounter {
             "Number of visitors: {}",
             self.visitor.load(Ordering::Relaxed)
         );
+    }
+}
+
+/*
+    Implement Fairing for VisitorCounter
+    ignite and liftoff are not really needed, just used to show
+    event handling. Counter will be incremented on every request.
+*/
+
+#[rocket::async_trait]
+impl Fairing for VisitorCounter {
+    fn info(&self) -> Info {
+        Info {
+            name: "Visitor Counter",
+            kind: Kind::Ignite | Kind::Liftoff | Kind::Request,
+        }
+    }
+    async fn on_ignite(&self, rocket: Rocket<Build>) -> fairing::Result {
+        println!("Setting up visitor counter");
+        Ok(rocket)
+    }
+    async fn on_liftoff(&self, _: &Rocket<Orbit>) {
+        println!("Finish setting up visitor counter");
+    }
+    async fn on_request(&self, _: &mut Request<'_>, _: &mut Data<'_>) {
+        self.increment();
     }
 }
 
@@ -143,8 +170,7 @@ fn post(data: Form<Filters>) -> &'static str {
 }
 
 #[get("/user/<uuid>", rank=1, format="text/plain")]
-async fn user(counter: &State<VisitorCounter>, pool: &State<PgPool>, uuid: &str) -> Result<User, Status> {
-    counter.increment();
+async fn user(pool: &State<PgPool>, uuid: &str) -> Result<User, Status> {
     let parsed_uuid = Uuid::parse_str(uuid)
         .map_err(|_| Status::BadRequest)?;
     let user = sqlx::query_as!(
@@ -163,8 +189,7 @@ fn users(grade: u8, filters: Filters) {
 }*/
 
 #[get("/users/<name_grade>?<filters..>")]
-async fn users(counter: &State<VisitorCounter>, pool: &State<PgPool>, name_grade: NameGrade<'_>, filters: Option<Filters>) -> Result<NewUser, Status> {
-    counter.increment();
+async fn users(pool: &State<PgPool>, name_grade: NameGrade<'_>, filters: Option<Filters>) -> Result<NewUser, Status> {
     let mut query_str = String::from("SELECT * FROM users WHERE name LIKE $1 AND grade = $2");
     if filters.is_some() {
         query_str.push_str("AND age = $3 AND active = $4");
@@ -218,7 +243,7 @@ async fn rocket() -> Rocket<Build> {
         visitor: AtomicU64::new(0),
     };
     this_rocket
-        .manage(visitor_counter)
+        .attach(visitor_counter)
         .manage(pool)
         .mount("/", routes![user, users, favicon])
         .register("/", catchers![forbidden, not_found])
